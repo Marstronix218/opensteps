@@ -48,6 +48,8 @@ def decide(
     user = db.get(User, payload.user_id)
     if user is None or user.tenant_id != tenant_id:
         raise HTTPException(404, "Approver not found")
+    if user.role not in {"admin", "approver"}:
+        raise HTTPException(403, "User is not permitted to approve actions")
     if approval.status != "pending":
         raise HTTPException(409, f"Approval is already {approval.status}")
     if utc_aware(approval.expires_at) <= datetime.now(timezone.utc):
@@ -65,7 +67,7 @@ def decide(
         EventData(
             tenant_id=tenant_id,
             run_id=approval.run_id,
-            event_type=f"approval.{status}",
+            event_type="approval.granted" if status == "approved" else "approval.rejected",
             parent_event_id=requested.id if requested else None,
             agent_id=uuid.UUID(scope["agent_id"]),
             user_id=user.id,
@@ -98,4 +100,3 @@ def reject(
     db: Session = Depends(get_db),
 ) -> Approval:
     return decide(db, tenant_id, approval_id, payload, "rejected")
-

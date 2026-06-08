@@ -42,6 +42,32 @@ def list_policies(tenant_id: uuid.UUID, db: Session = Depends(get_db)) -> list[P
     )
 
 
+@router.put("/policies/{policy_id}", response_model=PolicyOut)
+def update_policy(
+    tenant_id: uuid.UUID,
+    policy_id: uuid.UUID,
+    payload: PolicyCreate,
+    db: Session = Depends(get_db),
+) -> Policy:
+    policy = db.get(Policy, policy_id)
+    if policy is None or policy.tenant_id != tenant_id:
+        raise HTTPException(404, "Policy not found")
+    try:
+        policy_engine.evaluate_document(
+            payload.policy_yaml,
+            agent="validation",
+            tool="validation",
+            action="validation",
+            resource="validation",
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    policy.name = payload.name
+    policy.policy_yaml = payload.policy_yaml
+    db.commit()
+    return policy
+
+
 @router.post("/policy/evaluate", response_model=PolicyDecisionOut)
 def evaluate_policy(
     tenant_id: uuid.UUID, payload: PolicyEvaluate, db: Session = Depends(get_db)
@@ -53,4 +79,3 @@ def evaluate_policy(
         db, tenant_id=tenant_id, agent=agent, tool=payload.tool, action=payload.action, resource=payload.resource
     )
     return PolicyDecisionOut(decision=result.decision, matched_rule=result.matched_rule)
-

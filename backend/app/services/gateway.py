@@ -118,6 +118,26 @@ class GatewayService:
             "input_hash": input_hash,
         }
         approval = None
+        if request.approval_id is not None:
+            approval, error = validate_approval(
+                db,
+                approval_id=request.approval_id,
+                tenant_id=tenant_id,
+                run_id=request.run_id,
+                scope=scope,
+            )
+            if error:
+                ledger_service.append(
+                    db,
+                    EventData(
+                        **common,
+                        event_type="tool_call.failed",
+                        parent_event_id=evaluated.id,
+                        policy_decision=decision.decision,
+                        approval_id=request.approval_id,
+                    ),
+                )
+                return GatewayResult(403, {"status": "denied", "detail": error})
         if decision.decision == "approval_required":
             if request.approval_id is None:
                 approval_event = ledger_service.append(
@@ -148,25 +168,6 @@ class GatewayService:
                         "detail": "Human approval is required before execution",
                     },
                 )
-            approval, error = validate_approval(
-                db,
-                approval_id=request.approval_id,
-                tenant_id=tenant_id,
-                run_id=request.run_id,
-                scope=scope,
-            )
-            if error:
-                ledger_service.append(
-                    db,
-                    EventData(
-                        **common,
-                        event_type="tool_call.failed",
-                        parent_event_id=evaluated.id,
-                        policy_decision="approval_required",
-                        approval_id=request.approval_id,
-                    ),
-                )
-                return GatewayResult(403, {"status": "denied", "detail": error})
 
         requested = ledger_service.append(
             db,
@@ -207,4 +208,3 @@ class GatewayService:
             )
             detail = str(exc) if isinstance(exc, ConnectorError) else "Connector execution failed"
             return GatewayResult(502, {"status": "failed", "detail": detail})
-

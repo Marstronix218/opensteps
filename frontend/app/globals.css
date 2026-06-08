@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #13211a;
+  background: #f4f1e8;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  background-image:
+    linear-gradient(rgba(19, 33, 26, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(19, 33, 26, 0.045) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+code {
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+@layer components {
+  .panel {
+    @apply border border-line bg-paper/95 shadow-[4px_4px_0_#13211a];
+  }
+  .label {
+    @apply text-[11px] font-bold uppercase tracking-[0.18em] text-ink/60;
+  }
+  .button {
+    @apply border border-ink bg-ink px-4 py-2 text-sm font-bold text-paper transition hover:bg-signal hover:text-ink disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .hash {
+    @apply break-all font-mono text-[11px] leading-5 text-ink/70;
+  }
+}
+

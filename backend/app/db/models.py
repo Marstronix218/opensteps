@@ -10,6 +10,12 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def canonical_timestamp(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -105,7 +111,7 @@ class Event(Base):
             "policy_decision": self.policy_decision,
             "approval_id": str(self.approval_id) if self.approval_id else None,
             "signature": self.signature,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": canonical_timestamp(self.timestamp),
             "raw_payload_encrypted": self.raw_payload_encrypted,
         }
 
@@ -169,4 +175,3 @@ class Connector(Base):
     config_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     status: Mapped[str] = mapped_column(String(50), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-

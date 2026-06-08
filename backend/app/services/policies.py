@@ -21,12 +21,21 @@ class PolicyEngine:
     def evaluate_document(
         self, document: str, *, agent: str, tool: str, action: str, resource: str
     ) -> PolicyResult:
-        policy = yaml.safe_load(document) or {}
+        try:
+            policy = yaml.safe_load(document) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid policy YAML: {exc}") from exc
         if not isinstance(policy, dict):
             raise ValueError("Policy must be a YAML mapping")
-        for rule in policy.get("rules", []):
+        rules = policy.get("rules", [])
+        if not isinstance(rules, list):
+            raise ValueError("Policy rules must be a list")
+        for rule in rules:
             if not isinstance(rule, dict):
-                continue
+                raise ValueError("Each policy rule must be a mapping")
+            effect = rule.get("effect")
+            if effect not in self.valid_effects:
+                raise ValueError(f"Unsupported policy effect: {effect}")
             if not self._matches(rule.get("agent", "*"), agent):
                 continue
             if not self._matches(rule.get("tool", "*"), tool):
@@ -35,9 +44,6 @@ class PolicyEngine:
                 continue
             if not self._matches_any(rule.get("resources", ["*"]), resource):
                 continue
-            effect = rule.get("effect")
-            if effect not in self.valid_effects:
-                raise ValueError(f"Unsupported policy effect: {effect}")
             return PolicyResult(self.valid_effects[effect], rule)
         default = policy.get("default", "deny")
         if default not in self.valid_effects:
@@ -82,4 +88,3 @@ class PolicyEngine:
 
 
 policy_engine = PolicyEngine()
-

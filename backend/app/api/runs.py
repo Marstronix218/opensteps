@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -61,3 +62,27 @@ def get_run(
     )
     return {**RunOut.model_validate(run).model_dump(), "events": events}
 
+
+@router.post("/{run_id}/complete", response_model=RunOut)
+def complete_run(
+    tenant_id: uuid.UUID, run_id: uuid.UUID, db: Session = Depends(get_db)
+) -> Run:
+    run = db.get(Run, run_id)
+    if run is None or run.tenant_id != tenant_id:
+        raise HTTPException(404, "Run not found")
+    if run.status != "running":
+        raise HTTPException(409, f"Run is already {run.status}")
+    run.status = "completed"
+    run.ended_at = datetime.now(timezone.utc)
+    ledger_service.append(
+        db,
+        EventData(
+            tenant_id=tenant_id,
+            run_id=run.id,
+            event_type="run.completed",
+            agent_id=run.root_agent_id,
+            user_id=run.initiated_by_user_id,
+        ),
+    )
+    db.commit()
+    return run
