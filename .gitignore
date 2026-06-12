@@ -3,8 +3,12 @@
 __pycache__/
 .pytest_cache/
 *.py[cod]
+*.egg-info/
 node_modules/
 .next/
 *.log
 .DS_Store
 
+# local key material and receipt artifacts
+keys/
+demo/out/
