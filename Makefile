@@ -1,19 +1,15 @@
-.PHONY: up down test demo migrate seed
+PYTHON ?= .venv/bin/python
 
-up:
-	docker compose up -d --build --wait
+.PHONY: install test demo keygen
 
-down:
-	docker compose down
+install:
+	$(PYTHON) -m pip install -e '.[dev]'
 
 test:
-	docker compose run --rm backend pytest -q
+	$(PYTHON) -m pytest -q
 
-migrate:
-	docker compose run --rm backend alembic upgrade head
+demo:
+	$(PYTHON) demo/run_demo.py
 
-demo: up
-	docker compose exec backend python /app/examples/python_agent_client/demo.py
-
-seed: up
-	docker compose exec backend python /app/examples/python_agent_client/demo.py --seed-only
+keygen:
+	$(PYTHON) -m opensteps keygen --out-dir keys

@@ -1,221 +1,140 @@
 # OpenSteps
 
-OpenSteps is an enforceable authorization gateway and tamper-evident audit ledger for AI-agent
-tool calls. Agents sign requests and call OpenSteps instead of tools directly. OpenSteps verifies
-identity, evaluates policy, gates risky actions on human approval, invokes a controlled connector,
-and records each decision and result in a hash-linked event chain.
+**Independently verifiable receipts for AI agent actions.** Every tool call an
+agent makes through OpenSteps becomes a signed, hash-chained Agent Action
+Receipt — and an open-source `verify` command lets any third party (an auditor,
+a client, a regulator) check the record with no database access and no trust in
+the operator or in OpenSteps itself.
 
-The product promise is: **every AI-agent action is authorized, attributable, and tamper-evident.**
+Gateways and guardrails log what agents do, but the audit trail is owned by the
+party being audited; "tamper-evident" usually means a SOC 2 letter, not
+mathematics. OpenSteps is the evidence layer that sits behind or beside any
+gateway: the difference between *"our database says"* and *"here is a receipt
+you can verify yourself."*
 
-OpenSteps does not inspect or prove an agent's reasoning, prevent every malicious action, secure
-tools that bypass the gateway, or replace sandboxing and least privilege. It is not a chatbot,
-cryptocurrency, token system, or blockchain.
-
-## Architecture
-
-```text
- signed agent request
-          |
-          v
- +-------------------+     +------------------+
- | OpenSteps Gateway |---->| Agent public key |
- +---------+---------+     +------------------+
-           |
-           v
- +-------------------+   deny    +-----------------------+
- | YAML Policy Engine|---------->| blocked before tool   |
- +---------+---------+           +-----------------------+
-           | allow / approval_required
-           v
- +-------------------+           +-----------------------+
- | Human Approval    |---------->| GitHub/Slack/HTTP     |
- +---------+---------+  approved +-----------------------+
-           |                           |
-           +-------------+-------------+
-                         v
-              +---------------------+
-              | Append-only events  |
-              | SHA-256 hash chain  |
-              +----------+----------+
-                         v
-              +---------------------+
-              | Merkle checkpoint   |
-              | Ed25519 signature   |
-              +----------+----------+
-                         v
-              +---------------------+
-              | Audit dashboard     |
-              +---------------------+
+```
+ MCP client / agent
+        │  tools/call
+        ▼
+┌───────────────────┐   policy: allow / deny / approve (YAML)
+│  opensteps wrap   │──────────────────────────────────────────┐
+│  (MCP proxy)      │   every call → signed receipt            │
+└────────┬──────────┘   Ed25519 + SHA-256 hash chain (JSONL)   │
+         │  allowed calls                                      ▼
+         ▼                                          receipts.jsonl ──► opensteps verify
+┌───────────────────┐                                        (anyone, offline, no account)
+│ your MCP server   │
+└───────────────────┘
 ```
 
-## Local setup
+## Quickstart
 
-Requirements: Docker with Compose and `make`.
+Requires Python 3.11+.
 
 ```bash
-cp .env.example .env
-make up
+git clone https://github.com/Marstronix218/opensteps && cd opensteps
+python3 -m venv .venv && .venv/bin/pip install -e .
+
+# 1. generate a signing keypair
+.venv/bin/opensteps keygen --out-dir keys
+
+# 2. write a policy (see demo/policy.yaml for a fuller example)
+cat > policy.yaml <<'EOF'
+version: "0.1"
+default: deny
+rules:
+  - id: reads-ok
+    tool: "read_*"
+    action: allow
+  - id: writes-need-human
+    tool: "write_*"
+    action: approve
+EOF
+
+# 3. wrap your MCP server — wherever your client config used to launch
+#    `npx my-mcp-server`, launch this instead:
+.venv/bin/opensteps wrap \
+  --policy policy.yaml --key keys/signing.key --log receipts.jsonl \
+  -- npx my-mcp-server
+
+# 4. anyone with the public key can verify the chain, offline:
+.venv/bin/opensteps verify receipts.jsonl --pubkey keys/signing.pub
 ```
 
-`make up` builds the stack and applies Alembic migrations. The backend also migrates on container
-startup, so plain `docker compose up --build` is sufficient. Services:
+The proxy is a transparent newline-JSON-RPC passthrough that intercepts only
+`tools/call`, so it works with any MCP client and server. `deny` blocks the
+call before it reaches the server (the agent gets a tool error naming the
+rule); `approve` asks a human on the terminal and fails closed on timeout or
+when no terminal is available. **Blocked attempts become receipts too.**
 
-- Dashboard: http://localhost:3000
-- API: http://localhost:8000
-- OpenAPI docs: http://localhost:8000/docs
-- PostgreSQL: internal Compose network only
-
-Use a newly generated `SERVICE_PRIVATE_KEY` outside local development. The example key is public
-test material and must never be used in a deployed environment.
-
-## Commands
+## The demo: a prompt-injected bookkeeper
 
 ```bash
-make up       # build and start backend, frontend, PostgreSQL
-make down     # stop services
-make migrate  # apply Alembic migrations
-make test     # run backend tests
-make seed     # create tenant, user, agent, and policy
-make demo     # execute the full signed authorization workflow
+.venv/bin/pip install -e '.[demo]'
+make demo
 ```
 
-`make demo` creates a tenant, approver, Ed25519 agent, policy, and run. It executes an allowed fake
-pull request, pauses a merge for approval, retries after approval, proves an AWS deletion is denied
-before connector execution, completes the run, signs a checkpoint, verifies the ledger, and prints
-dashboard URLs.
+A scripted bookkeeping agent processes invoices through OpenSteps. One invoice
+carries a prompt injection directing the agent to wire $45,000 to an attacker.
+The agent attempts it; policy blocks it; the blocked attempt becomes receipt
+number 4 in the chain; `opensteps verify` proves the whole record; and the demo
+then shows that editing or deleting that receipt makes verification fail at
+exactly that point. (OWASP Agentic Top 10: ASI01 goal hijack, ASI02 tool
+misuse.)
 
-For local tests without Docker:
+## The receipt format
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/pip install -e 'backend[dev]'
-cd backend && ../.venv/bin/pytest
-```
+One JSON object per tool call, hash-chained and signed:
 
-## API examples
+- `request_hash` / `response_hash` — SHA-256 of the RFC 8785 (JCS)
+  canonicalized call params and result (hashes, not payloads: no client data
+  is re-disclosed).
+- `policy` — which rule fired and whether the call was allowed, denied, or
+  human-approved.
+- `prev_hash` — hash of the previous receipt, signature included: deleting,
+  reordering, or rewriting any receipt breaks the chain.
+- `signature` — Ed25519 over the canonicalized receipt body.
 
-Create a tenant and agent:
+The full normative spec is [docs/SCHEMA.md](docs/SCHEMA.md) — deliberately
+complete enough that a stranger can reimplement the verifier in any language.
 
-```bash
-curl -X POST http://localhost:8000/tenants \
-  -H 'content-type: application/json' \
-  -d '{"name":"Example"}'
+## What this proves, honestly
 
-curl -X POST http://localhost:8000/tenants/$TENANT_ID/agents \
-  -H 'content-type: application/json' \
-  -d '{"name":"code-agent","public_key":"BASE64_ED25519_PUBLIC_KEY"}'
-```
+A valid chain proves the recorded calls happened in this order, signed by the
+keyholder, with nothing altered, dropped, or reordered afterward. It does not
+prove that calls bypassing the proxy were recorded, and a keyholder could
+regenerate an entire alternative history. Each rung of the roadmap raises the
+attacker's cost:
 
-Verify a tenant or run ledger:
+1. **Signed hash chain** (this repo) — tampering breaks cryptography, not a
+   promise.
+2. **Transparency-log anchoring** — chain heads published to a public
+   append-only log (Sigstore Rekor or equivalent); rewriting history becomes
+   publicly visible.
+3. **TEE-attested signer** — the signature proves *unmodified, published
+   enforcement code* produced the receipt.
 
-```bash
-curl -X POST http://localhost:8000/tenants/$TENANT_ID/ledger/verify \
-  -H 'content-type: application/json' \
-  -d '{"run_id":"OPTIONAL_RUN_UUID"}'
-```
-
-The signed gateway body is:
-
-```json
-{
-  "run_id": "uuid",
-  "agent_id": "uuid",
-  "tool": "github",
-  "action": "create_pull_request",
-  "resource": "repo:example/app",
-  "input": {"title": "Fix bug", "branch": "fix-bug"},
-  "approval_id": null,
-  "signature": "base64 Ed25519 signature"
-}
-```
-
-See `examples/python_agent_client/client.py` for canonicalization and signing code.
-
-## Security design
-
-### Agent signatures
-
-Each agent has an Ed25519 public key. The client removes `signature`, serializes the remaining
-request as deterministic JSON (sorted keys, compact separators, UTF-8), and signs those bytes.
-The gateway verifies the signature before treating the request as attributable. Invalid signatures
-are rejected with HTTP 401.
-
-### Event hashes
-
-OpenSteps stores hashes of tool inputs and outputs, not raw payloads. Each event hash is SHA-256
-over canonical event fields plus `previous_hash`. Event IDs and UTC timestamps are included.
-Events have no update or delete API, and ORM update/delete hooks reject accidental application-level
-mutation.
-
-### Ledger verification
-
-Verification reads the tenant chain in order, recomputes every event hash, and confirms each
-`previous_hash` points to the preceding event. A failure reports the exact event and expected value.
-A run-scoped request reports the run's checked-event count while validating the full tenant chain
-that anchors it.
-
-This detects mutation after the fact. A database administrator can still rewrite an entire chain;
-exported signed checkpoints are the planned external anchor for detecting that stronger attack.
-
-### Approvals
-
-A policy can return `approval_required`. OpenSteps records the requirement and creates a pending,
-expiring approval whose scope binds:
-
-- agent ID
-- tool
-- action
-- resource
-- input hash
-
-The connector is not called. An authorized user approves or rejects the request. The agent then
-re-signs and retries with the approval ID. OpenSteps rejects expired, rejected, cross-tenant,
-cross-run, or scope-mismatched approvals. Supplying an approval to a different action does not
-bypass policy.
-
-### Checkpoints
-
-A checkpoint covers all new event hashes since the previous checkpoint. Leaves are folded into a
-deterministic SHA-256 Merkle root (duplicating an odd final leaf), then the checkpoint metadata is
-signed by the service Ed25519 key. A `checkpoint.created` event is appended after the boundary.
-
-### HTTP connector
-
-The HTTP connector requires HTTPS, exact hostname allowlisting, a bounded method set, a ten-second
-timeout, and disabled redirects. Response bodies are not persisted. Production deployments should
-also enforce egress controls at the network layer.
-
-## Threat model
-
-OpenSteps protects against silent log tampering after the fact by making mutations break the event
-hash chain. It supports attribution through verified agent signatures and enforcement through
-gateway policies and approval gates.
-
-OpenSteps does **not** prove the AI agent's reasoning is correct. It does not protect any action that
-bypasses the gateway and does not eliminate the need for sandboxing, least privilege, secret
-isolation, connector-specific permissions, network controls, and independent monitoring. A
-compromised service signing key or database plus signing service requires key rotation and external
-checkpoint storage to contain. OpenSteps is not a blockchain.
+The claim is audit-grade, independently verifiable receipts designed to
+simplify evidentiary authentication (cf. US FRE 902(13)/902(14)) — not
+"court-grade proof." See [docs/OpenSteps_Final.md](docs/OpenSteps_Final.md)
+for the full thesis.
 
 ## Repository
 
-```text
-backend/    FastAPI, SQLAlchemy, Alembic, policy and ledger services, tests
-frontend/   Next.js TypeScript audit dashboard
-examples/   signed Python agent client and demo workflow
+```
+src/opensteps/   proxy, policy engine, receipt signer, offline verifier, CLI
+demo/            the prompt-injection launch demo (make demo)
+docs/SCHEMA.md   normative receipt format
+tests/           unit, tamper-matrix, and end-to-end proxy tests (make test)
+legacy/          the superseded v1.0 hosted-gateway prototype (unmaintained)
 ```
 
-The fake GitHub and Slack connectors never contact external services. The HTTP connector is the only
-MVP connector that performs outbound I/O.
+## Development
 
-## Roadmap
+```bash
+make install   # pip install -e '.[dev]' into .venv
+make test      # pytest
+make demo      # the launch scenario
+```
 
-- Real GitHub integration
-- MCP proxy
-- Open Policy Agent integration
-- Customer-owned S3 checkpoint export
-- Cloud KMS/HSM support
-- SOC 2 evidence export
-- SIEM integration
-- Real-time anomaly detection
-
+License: Apache-2.0.

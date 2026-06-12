@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opensteps"
+version = "0.1.0"
+description = "Signed, hash-chained, independently verifiable receipts for AI agent tool calls: an MCP proxy and a standalone verifier"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+keywords = ["mcp", "ai-agents", "audit", "receipts", "tamper-evident", "ed25519"]
+dependencies = [
+    "cryptography>=42",
+    "PyYAML>=6",
+    "rfc8785>=0.1.4",
+]
+
+[project.optional-dependencies]
+demo = ["mcp>=1.0"]
+dev = ["mcp>=1.0", "pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+opensteps = "opensteps.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

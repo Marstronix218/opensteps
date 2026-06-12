@@ -1,0 +1,30 @@
+# Policy for the demo bookkeeper: read freely, post journal entries, and pay
+# only known vendors up to $5,000. Everything else — including the injected
+# $45,000 transfer to "Globex Holdings" — is denied and receipted.
+version: "0.1"
+default: deny
+rules:
+  - id: invoice-reads-allowed
+    tool: "list_invoices"
+    action: allow
+
+  - id: invoice-detail-reads-allowed
+    tool: "read_invoice"
+    action: allow
+
+  - id: journal-entries-allowed
+    tool: record_journal_entry
+    action: allow
+
+  - id: payments-to-known-vendors
+    tool: create_payment
+    where:
+      - param: payee
+        one_of: ["Acme Office Supplies", "CloudHost Inc"]
+      - param: amount
+        max: 5000
+    action: allow
+
+  - id: deny-unapproved-payments
+    tool: create_payment
+    action: deny
